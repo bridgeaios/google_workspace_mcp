@@ -3,7 +3,7 @@ services:
     build: .
     container_name: gws_mcp
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - GOOGLE_MCP_CREDENTIALS_DIR=/app/store_creds
     volumes:
