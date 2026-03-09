@@ -14,7 +14,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from auth.permissions import (
     get_scopes_for_permission,
+    is_action_denied,
     parse_permissions_arg,
+    set_permissions,
     SERVICE_PERMISSION_LEVELS,
 )
 from auth.scopes import (
@@ -24,6 +26,8 @@ from auth.scopes import (
     GMAIL_COMPOSE_SCOPE,
     DRIVE_READONLY_SCOPE,
     DRIVE_SCOPE,
+    TASKS_READONLY_SCOPE,
+    TASKS_SCOPE,
     DRIVE_FILE_SCOPE,
 )
 
@@ -67,6 +71,11 @@ class TestParsePermissionsArg:
         """A level containing a colon should fail as unknown level."""
         with pytest.raises(ValueError, match="Unknown level"):
             parse_permissions_arg(["gmail:read:only"])
+
+    def test_tasks_manage_is_valid_level(self):
+        """tasks:manage should be accepted by parse_permissions_arg."""
+        result = parse_permissions_arg(["tasks:manage"])
+        assert result == {"tasks": "manage"}
 
 
 class TestGetScopesForPermission:
@@ -116,3 +125,77 @@ class TestGetScopesForPermission:
                 assert len(scopes) == len(set(scopes)), (
                     f"Duplicate scopes for {service}:{level_name}"
                 )
+
+    def test_tasks_manage_includes_write_scope(self):
+        """Manage level should cumulatively include readonly and write scopes."""
+        scopes = get_scopes_for_permission("tasks", "manage")
+        assert TASKS_SCOPE in scopes
+        assert TASKS_READONLY_SCOPE in scopes
+
+    def test_tasks_full_includes_write_scope(self):
+        """Full level should include write and readonly scopes from lower levels."""
+        scopes = get_scopes_for_permission("tasks", "full")
+        assert TASKS_SCOPE in scopes
+        assert TASKS_READONLY_SCOPE in scopes
+
+
+@pytest.fixture(autouse=True)
+def _reset_permissions_state():
+    """Ensure each test starts and ends with no active permissions."""
+    set_permissions(None)
+    yield
+    set_permissions(None)
+
+
+class TestIsActionDenied:
+    """Tests for is_action_denied() and SERVICE_DENIED_ACTIONS."""
+
+    def test_no_permissions_mode_allows_all(self):
+        """Without granular permissions, no action is denied."""
+        set_permissions(None)
+        assert is_action_denied("tasks", "delete") is False
+
+    def test_tasks_full_allows_delete(self):
+        """Full level should not deny delete."""
+        set_permissions({"tasks": "full"})
+        assert is_action_denied("tasks", "delete") is False
+
+    def test_tasks_manage_denies_delete(self):
+        """Manage level should deny delete."""
+        set_permissions({"tasks": "manage"})
+        assert is_action_denied("tasks", "delete") is True
+
+    def test_tasks_manage_allows_create(self):
+        """Manage level should allow create."""
+        set_permissions({"tasks": "manage"})
+        assert is_action_denied("tasks", "create") is False
+
+    def test_tasks_manage_allows_update(self):
+        """Manage level should allow update."""
+        set_permissions({"tasks": "manage"})
+        assert is_action_denied("tasks", "update") is False
+
+    def test_tasks_manage_allows_move(self):
+        """Manage level should allow move."""
+        set_permissions({"tasks": "manage"})
+        assert is_action_denied("tasks", "move") is False
+
+    def test_tasks_manage_denies_clear_completed(self):
+        """Manage level should deny clear_completed."""
+        set_permissions({"tasks": "manage"})
+        assert is_action_denied("tasks", "clear_completed") is True
+
+    def test_tasks_full_allows_clear_completed(self):
+        """Full level should not deny clear_completed."""
+        set_permissions({"tasks": "full"})
+        assert is_action_denied("tasks", "clear_completed") is False
+
+    def test_service_not_in_permissions_allows_all(self):
+        """A service not listed in permissions should allow all actions."""
+        set_permissions({"gmail": "readonly"})
+        assert is_action_denied("tasks", "delete") is False
+
+    def test_service_without_denied_actions_allows_all(self):
+        """A service with no SERVICE_DENIED_ACTIONS entry should allow all actions."""
+        set_permissions({"gmail": "readonly"})
+        assert is_action_denied("gmail", "delete") is False
